@@ -1,0 +1,23 @@
+---
+title: "p8106_midterm_project"
+author: "David DeStephano"
+date: "March 27, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load the data set
+Tips for dealing with large data https://rpubs.com/msundar/large_data_analysis 
+
+```{r message=FALSE}
+library(tidyverse)
+library(summarytools)
+sparcs<-read_csv("Hospital_Inpatient_Discharges__SPARCS_De-Identified___2013.csv")
+```
+
+```{r}
+#dfSummary(sparcs) 
+```
