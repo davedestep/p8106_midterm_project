@@ -27,6 +27,7 @@ sparcs %>% janitor::clean_names() %>%  ggplot(aes(x = age_group, y=total_charges
 
 ##2,000,000 rows is excessive, so just going to look at newborns and see if we can predict costs
 ```{r}
+<<<<<<< HEAD
 newborns<-sparcs %>% filter(`Birth Weight`!="0000") %>% janitor::clean_names()
 ```
 
@@ -54,9 +55,19 @@ newborns %>% ggplot(aes(x = race, y=total_charges, fill = race))+
 
 ```{r}
 
+
+
+  
 ```
 
 
 
+=======
+#dfSummary(sparcs) 
+```
+
+
+test test  test
+>>>>>>> 3a1e7b6198488556daff74a8f4fb45a9547766a1
 
 
