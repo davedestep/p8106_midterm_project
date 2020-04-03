@@ -9,13 +9,24 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+
+
+##Links
+https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8489257
+
+
+
 ## Load the data set
 Tips for dealing with large data https://rpubs.com/msundar/large_data_analysis 
 
 ```{r message=FALSE}
 library(tidyverse)
+library(caret)
 library(summarytools)
 library(cowplot)
+library(ModelMetrics)
+library(pls)
+
 sparcs<-read_csv("Hospital_Inpatient_Discharges__SPARCS_De-Identified___2013.csv")
 
 sparcs %>% janitor::clean_names() %>%  ggplot(aes(x = age_group, y=total_charges, fill = age_group))+
@@ -25,13 +36,13 @@ sparcs %>% janitor::clean_names() %>%  ggplot(aes(x = age_group, y=total_charges
 
 
 
-##2,000,000 rows is excessive, so just going to look at newborns and see if we can predict costs
+##2,000,000 rows is excessive, and I do not want to wait forever when running models. So I am just going to look at newborns and see if we can predict costs
 ```{r}
-<<<<<<< HEAD
-newborns<-sparcs %>% filter(`Birth Weight`!="0000") %>% janitor::clean_names()
+newborns<-sparcs %>% filter(`Birth Weight`!="0000") %>% janitor::clean_names() 
+rm(sparcs)
 ```
 
-##Descriptive Stats
+##Descriptive Stats and Visualization
 ```{r warning=FALSE}
 dfSummary(newborns) 
 
@@ -49,25 +60,276 @@ ggplot(newborns, aes(x = total_charges, y = ..density..)) +
 newborns %>% ggplot(aes(x = race, y=total_charges, fill = race))+
   geom_boxplot() +ylim(0,50000)
 
+newborns %>% ggplot(aes(x = race, y=total_costs, fill = ethnicity))+
+  geom_boxplot() +ylim(0,30000)
+
+
+newborns %>% ggplot(aes(x = race, y=total_charges, fill = ethnicity))+
+  geom_boxplot() +ylim(0,50000)
+
+
+newborns %>% select(race, total_costs, total_charges)  %>% 
+  ggplot(aes(x = total_costs, y=total_charges, group=race, color=race))+
+  geom_smooth(se=FALSE)
+
+
+
+newborns  %>% 
+  ggplot(aes(x = total_costs, y=total_charges, group=payment_typology_1, color=payment_typology_1))+
+  geom_smooth(method="lm", se=FALSE)+ylim(0,20000) + xlim(0, 10000)
+
+
+newborns  %>% 
+  ggplot(aes(x = total_costs, y=total_charges, group=payment_typology_1, color=payment_typology_1))+
+  geom_smooth(se=FALSE)+ylim(0,20000) + xlim(0, 10000)
+
+
+
+newborns  %>% 
+  ggplot(aes(x = total_costs, y=total_charges, group=payment_typology_1, color=payment_typology_1))+
+  geom_smooth(se=FALSE)+ylim(0,200000) + xlim(0, 100000)
+
 ```
+
+
+#Remove redundant categorical variables, dummify the remaining categorical variables, and remove zero variance predictors
+```{r}
+newborn_model<-newborns %>% select(-operating_certificate_number, -facility_id, -discharge_year, -age_group, -ccs_diagnosis_code, -ccs_procedure_code, -apr_drg_code, -apr_mdc_code, -apr_severity_of_illness_code, -payment_typology_2, -payment_typology_3, -abortion_edit_indicator) %>% 
+  mutate(birth_weight=as.numeric(birth_weight),
+         length_of_stay=as.numeric(length_of_stay)) %>% 
+  na.omit() #Don't feel like imputing
+
+#A lot of categorical variables:
+#facility_name
+#zip code
+#remove apr_drg_description?
+
+newborn_model <- newborn_model %>% select(-facility_name, -zip_code_3_digits)
+
+dmy<- dummyVars(" ~.", data=newborn_model, fullRank = T)
+trsf <- data.frame(predict(dmy, newdata = newborn_model))
+
+#zero_var = nearZeroVar(trsf, saveMetrics = TRUE)
+#23821.100
+
+
+
+```
+
+
+There are many near zero variance dummy variables. There were several ideas on how to deal with this: could remove any dummy variable with less than ten observations using nearZeroVar(), as they have very low variance, this will help speed up the model.. This could severley affect the reference as there are many cost outliers.. So under normal circumstances this would not be ideal... Should maybe just delete the patients with these variables? Or could just rerun the analysis later and exclude ccs_procedure ccs_diagnosis apr_drg variables (the variables with the most dummies) and compare the RMSE. Will try this after running a linear model and PCR, with 3 fold CV, as to save computing power on the 500 variable dataset. 
+
+
+
+#Create test and training data
+```{r}
+set.seed(1)
+rowTrain <-createDataPartition(y = trsf$total_charges,
+                               p = 2/3,
+                               list = FALSE)
+
+# training data
+x <- model.matrix(total_charges~.,trsf)[rowTrain,-1]
+y <- trsf$total_charges[rowTrain]
+
+# test data
+x2 <- model.matrix(total_charges~.,trsf)[-rowTrain,-1]
+y2 <- trsf$total_charges[-rowTrain]
+
+```
+
+
+
+
+#Linear model using CCS and APR DRG categories
+##Commented out due to computation time
+```{r}
+# ctrl1 <-trainControl(method = "cv", number = 3)
+# set.seed(1)
+# 
+# lm.fit <-train(x, y, method = "lm",trControl = ctrl1)
+# 
+# predy2.lm <-predict(lm.fit, newdata = x2)
+# 
+# mae(y2, predy2.lm)
+# mse(y2, predy2.lm)
+# rmse(y2, predy2.lm)
+```
+
+10 fold CV:
+MAE: [1] 7492.759
+MSE: [1] 758991280
+RMSE: [1] 27549.8
+
+By comparison, here are the estimates if you were to model cost instead of charges:
+MAE: [1] 1863.642
+MSE  [1] 43849131
+RMSE [1] 6621.868
+Obviously charges can vary more wildly
+
+
+
+#PCR using CCS and APR DRG variables
+```{r}
+# set.seed(1)
+# pcr.fit <- train(x, y,
+#                  method = "pcr",
+#                  tuneGrid = data.frame(ncomp = 1:425),
+#                  trControl = ctrl1,
+#                  preProc = c("center", "scale"))
+# 
+# predy2.pcr4 <- predict(pcr.fit, newdata = x2)
+# 
+# mae(y2, predy2.pcr4)
+# mse(y2, predy2.pcr4)
+# rmse(y2, predy2.pcr4)
+# 
+# ggplot(pcr.fit, highlight = TRUE) + theme_bw()
+# pcr.fit$bestTune
+# 
+# pcr.fit$results %>% filter(ncomp==397)
+
+```
+
+On seperate test data:
+MAE:  [1] 8055.074
+MSE:  [1] 840093694
+RMSE: [1] 28984.37
+
+
+397 was the ideal numberof components, this is very large..
+Error using pcr.fit$results %>% filter(ncomp==413)
+MAE:  7454.877
+RMSE: 27168
+Rsquared: 0.835
+
+
+When getting RMSE from separate test data, RMSE is 28984, linear model was 27549.8, but this model has a lower MAE. Regardless, PCR does not seem to improve the accuracy significantly. Will compare these numbers to model without CCS and APR DRG variables.
+
+
+
+
+#Try the analysis again without the ccs_procedure, ccs_diagnosis, and apr_drg variables
+##Choice to try this method and compare instead of either dropping dummy variables with low freqs or dropping patients with those categories
+```{r}
+newborn_model2 <- newborn_model %>% select(-ccs_diagnosis_description, -ccs_procedure_description, -apr_drg_description)
+
+dmy2<- dummyVars(" ~.", data=newborn_model2, fullRank = T)
+trsf2 <- data.frame(predict(dmy2, newdata = newborn_model2))
+
+```
+
+```{r}
+set.seed(1)
+rowTrain <-createDataPartition(y = trsf2$total_charges,
+                               p = 2/3,
+                               list = FALSE)
+
+# training data
+x <- model.matrix(total_charges~.,trsf2)[rowTrain,-1]
+y <- trsf$total_charges[rowTrain]
+
+# test data
+x2 <- model.matrix(total_charges~.,trsf2)[-rowTrain,-1]
+y2 <- trsf$total_charges[-rowTrain]
+
+```
+
+
+```{r error=FALSE}
+ctrl1 <-trainControl(method = "cv", number = 10)
+#ctrl1 <-trainControl(method = "none")
+set.seed(1)
+
+lm.fit2 <-train(x, y, method = "lm",trControl = ctrl1)
+
+predy2.lm2 <-predict(lm.fit2, newdata = x2)
+
+mae(y2, predy2.lm2)
+mse(y2, predy2.lm2)
+rmse(y2, predy2.lm2)
+```
+
+Very similar RMSE to before.
+
+
+#PCR
+```{r}
+set.seed(1)
+pcr.fit2 <- train(x, y,
+                 method = "pcr",
+                 tuneGrid = data.frame(ncomp = 1:118), 
+                 trControl = ctrl1,
+                 preProc = c("center", "scale"))
+
+pred.pcr2 <- predict(pcr.fit2, newdata = x2)
+
+mae(y2, pred.pcr2)
+mse(y2, pred.pcr2)
+rmse(y2, pred.pcr2)
+
+ggplot(pcr.fit2, highlight = TRUE) + theme_bw()
+pcr.fit2$bestTune
+
+pcr.fit2$results %>% filter(ncomp==114)
+
+```
+
+Removing the CCS and APR variables provides a lower RMSE and MAE. I think computationally this model is a better choice, and we have evidence that it actually performs better. We only lose 0.2% from our Rsquared value. 
+
+This tells us that perhaps the super-specific diagnosis and procedure codes are not highly predicitve of charges, this somewhat defies expectations, as billing is generally completed using billing codes. This could just be the case for infants, as length of stay and severity are probably much greater factors of charges, while procedures are disproportionately and more or less uniformly deliveries, with some complications explainig the higher charges.
+
+```{r}
+importance = varImp(pcr.fit2, scale=FALSE)
+importance
+```
+
+
+We only needed 114 components this time, which is still not great so will try alternative models.
+
+
+```{r}
+set.seed(1)
+enet.fit <- train(x, y,
+                  method = "glmnet",
+                  tuneGrid = expand.grid(alpha = seq(0, 1, length = 5),
+                                         lambda = exp(seq(-2, 5, length = 50))),
+                  preProc = c("center", "scale"),
+                  trControl = ctrl1)
+
+pred.enet <- predict(enet.fit, newdata = x2)
+
+mae(y2, pred.enet)
+mse(y2, pred.enet)
+rmse(y2, pred.enet)
+
+enet.fit$results
+```
+
+
+```{r}
+enet.fit$bestTune
+ggplot(enet.fit, highlight = TRUE) + theme_bw()
+
+
+coef(enet.fit$finalModel,enet.fit$bestTune$lambda)
+```
+
+
+
+
+
 
 
 
 ```{r}
+resamp <-resamples(list(lm = lm.fit2, PCR = pcr.fit2, enet=enet.fit))
+summary(resamp)
 
+bwplot(resamples(list(lm = lm.fit2, PCR = pcr.fit2, enet=enet.fit)), metric = "RMSE")
 
+bwplot(resamples(list(lm = lm.fit2, PCR = pcr.fit2, enet=enet.fit, enet2=enet.fit2)), metric = "MAE")
 
-  
 ```
 
-
-
-=======
-#dfSummary(sparcs) 
-```
-
-
-test test  test
->>>>>>> 3a1e7b6198488556daff74a8f4fb45a9547766a1
-
-
+There is barely a difference between any of the fitted models.
