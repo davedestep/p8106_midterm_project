@@ -9,11 +9,51 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+#Introduction
+Hosptial billing is often nebulous, and differs dramatically from actual costs. The purpose of this project is to use SPARCS deidentified data to predict total charges of service for newborns in NYS. We hope to achieve a model that performs relatively well on the majority of observations, and performs reasonably well on high outliers, of which there are many. We also hope to determine if demographic and insurance characteristics are influential on charges (not costs of service), to see if patient and payer characteristics affect hospital inpatient charges.
+
+Data was downloaded from the NYS health data website: https://health.data.ny.gov/Health/Hospital-Inpatient-Discharges-SPARCS-De-Identified/npsr-cm47
+
+The data was cleaned by reoving any observation without a missing birthweight variable, to limit the analysis to newborns only. The data had variables for diagnosis and procedure codes as well as descriptions, so redundant variables were removed. Descriptions were kept as to aid with interpretation.
+
+Variables with too many categories such as zip code and hospital name were removed. The remainder of categorical variables were then dummified to ensure the variables would work well with Caret. To avoid multicolinearity the option fullRank=T was used in the dummyVar function.
+
+Due to the high amount of categories in some of these variables, categories with zero or near zero variances were examined. They were then determined to not improve model performance significantly, and were removed in subsequent models. The variables removed were CCS diagnosis and procedure codes, as well as the APR DRG variable. This left the model with multilevel (CCS) variables, while single level variables were removed.  
 
 
-##Links
-https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8489257
+#Exploratory Analysis
+As expected, charges vastly surpass the actual costs of inpatient stays for newborns. There appear to be slight differences in slopes between cost and charges for different races, but this can not be tested to be meaningful at this stage. There also appear to be differences between payment types, meaning that demographic and payment typology may interact with costs/charges may not be uniform between groups.
 
+#Models
+Many variables were dropped for the final model, none of which significantly increased model performance. The final model containted the following predictors:
+
+ [1] "apr_mdc_description"                
+ [2] "apr_medical_surgical_description"   
+ [3] "apr_risk_of_mortality"              
+ [4] "apr_severity_of_illness_description"
+ [5] "birth_weight"                       
+ [6] "emergency_department_indicator"     
+ [7] "ethnicity"                          
+ [8] "gender"                             
+ [9] "health_service_area"                
+[10] "hospital_county"                    
+[11] "length_of_stay"                     
+[12] "patient_disposition"                
+[13] "payment_typology_1"                 
+[14] "race"                               
+[15] "total_costs"                        
+[16] "type_of_admission"
+
+A linear model and PCR were fit initially to test the performance when including APR DRG, and CCS variables. These variables were removed, and a linear model, PCR, lasso, and elastic net were used on the dummified dataset. Tuning parameters were choses using 5 fold cross validation A GAM model was fit as well to account for possible non linearity.
+
+Test performance RMSE did not change between the regularized models, while MAE was slightly lower in the elastic net and lasso models. RMSE was much lower in the GAM model compared to the regularized and linear models. Comparisons can be found below in the attached R markdown code and output.
+
+Obviously cost was important in predicting total charges, but the other continuous variables were also important, including length of stay and birthweight. Risk of mortality and severity were also important predictors.
+
+Limitations include extreme outlying charges. Tese observations resuted in high errors, as they were much more difficult to accurately predict. The models also did not include interaction terms, so there was no test of whether there is an interaction between cost and race or payment typology.
+
+#Conclusion
+The GAM model fit the data the best and had the lowest RMSE and MAE. The other regularized and linear models performed about the same. I expected the regularized models to fit the best, because there are a large amount of dummy variables that I expected would have their coefficients shrunk.
 
 
 ## Load the data set
@@ -44,48 +84,31 @@ rm(sparcs)
 
 ##Descriptive Stats and Visualization
 ```{r warning=FALSE}
-dfSummary(newborns) 
 
-newborns %>% ggplot(aes(x=total_costs))+
+a<-newborns %>% ggplot(aes(x=total_costs))+
   geom_histogram()+xlim(0,50000)
 
-newborns %>% ggplot(aes(x=total_charges))+
+b<-newborns %>% ggplot(aes(x=total_charges))+
   geom_histogram()+xlim(0,50000)
 
+require(gridExtra)
+grid.arrange(a,b)
+# ggplot(newborns, aes(x = total_charges, y = ..density..)) + 
+#     stat_density(geom="line")  +xlim(0,50000)
 
-ggplot(newborns, aes(x = total_charges, y = ..density..)) + 
-    stat_density(geom="line")  +xlim(0,50000)
-
-
-newborns %>% ggplot(aes(x = race, y=total_charges, fill = race))+
-  geom_boxplot() +ylim(0,50000)
-
-newborns %>% ggplot(aes(x = race, y=total_costs, fill = ethnicity))+
-  geom_boxplot() +ylim(0,30000)
 
 
 newborns %>% ggplot(aes(x = race, y=total_charges, fill = ethnicity))+
   geom_boxplot() +ylim(0,50000)
 
 
-newborns %>% select(race, total_costs, total_charges)  %>% 
+newborns %>%  
   ggplot(aes(x = total_costs, y=total_charges, group=race, color=race))+
-  geom_smooth(se=FALSE)
-
-
-
-newborns  %>% 
-  ggplot(aes(x = total_costs, y=total_charges, group=payment_typology_1, color=payment_typology_1))+
-  geom_smooth(method="lm", se=FALSE)+ylim(0,20000) + xlim(0, 10000)
-
-
-newborns  %>% 
-  ggplot(aes(x = total_costs, y=total_charges, group=payment_typology_1, color=payment_typology_1))+
   geom_smooth(se=FALSE)+ylim(0,20000) + xlim(0, 10000)
 
 
 
-newborns  %>% 
+newborns  %>%
   ggplot(aes(x = total_costs, y=total_charges, group=payment_typology_1, color=payment_typology_1))+
   geom_smooth(se=FALSE)+ylim(0,200000) + xlim(0, 100000)
 
@@ -235,9 +258,9 @@ y2 <- trsf$total_charges[-rowTrain]
 
 ```
 
-
+#Linear model
 ```{r error=FALSE}
-ctrl1 <-trainControl(method = "cv", number = 10)
+ctrl1 <-trainControl(method = "cv", number = 5)
 #ctrl1 <-trainControl(method = "none")
 set.seed(1)
 
@@ -275,7 +298,7 @@ pcr.fit2$results %>% filter(ncomp==114)
 
 ```
 
-Removing the CCS and APR variables provides a lower RMSE and MAE compared to the previous model with these variables. I think computationally this model is a better choice, and we have evidence that it actually performs better. We only lose 0.2% from our Rsquared value. 
+Removing the CCS and APR variables provides a lower RMSE and MAE compared to the previous model with these variables included. I think computationally this model is a better choice, and we have evidence that it actually performs better. We only lose 0.2% from our Rsquared value. 
 
 This tells us that perhaps the super-specific diagnosis and procedure codes are not highly predicitve of charges, this somewhat defies expectations, as billing is generally completed using billing codes. This could just be the case for infants, as length of stay and severity are probably much greater factors of charges, while procedures are disproportionately and more or less uniformly deliveries, with some complications explainig the higher charges.
 
@@ -305,6 +328,8 @@ coef(lasso.fit$finalModel,lasso.fit$bestTune$lambda)
 ```
 
 
+I could not tell you why the coefficient estimate is 30000 for cost, is this for every dollar of cost? Or did something happen with the standardization process?
+
 #Enet
 ```{r error=FALSE}
 set.seed(1)
@@ -321,7 +346,7 @@ mae(y2, pred.enet)
 mse(y2, pred.enet)
 rmse(y2, pred.enet)
 
-enet.fit$results
+#enet.fit$results
 ```
 
 
@@ -332,15 +357,31 @@ coef(enet.fit$finalModel,enet.fit$bestTune$lambda)
 ```
 
 
+
+There is barely a difference between any of the regularized models.
+
+
+#Non linear model
 ```{r}
-resamp <-resamples(list(lm = lm.fit2, PCR = pcr.fit2, lasso=lasso.fit, enet=enet.fit))
+library(mgcv)
+
+gam.m <-gam(total_charges~s(total_costs)+s(length_of_stay)+s(birth_weight), data = trsf2)
+plot(gam.m)
+
+
+gam.fit <-train(x, y,
+                method = "gam",
+                tuneGrid =data.frame(method = "GCV.Cp", select =c(TRUE,FALSE)),
+                trControl = ctrl1)
+
+```
+
+```{r}
+resamp <-resamples(list(lm = lm.fit2, PCR = pcr.fit2, lasso=lasso.fit, enet=enet.fit, gam=gam.fit))
 summary(resamp)
 
-bwplot(resamples(list(lm = lm.fit2, PCR = pcr.fit2, lasso=lasso.fit, enet=enet.fit)), metric = "RMSE")
-
+bwplot((resamp), metric = "RMSE")
 
 bwplot((resamp), metric = "MAE")
 
 ```
-
-There is barely a difference between any of the fitted models.
