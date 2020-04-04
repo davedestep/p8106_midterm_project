@@ -275,7 +275,7 @@ pcr.fit2$results %>% filter(ncomp==114)
 
 ```
 
-Removing the CCS and APR variables provides a lower RMSE and MAE. I think computationally this model is a better choice, and we have evidence that it actually performs better. We only lose 0.2% from our Rsquared value. 
+Removing the CCS and APR variables provides a lower RMSE and MAE compared to the previous model with these variables. I think computationally this model is a better choice, and we have evidence that it actually performs better. We only lose 0.2% from our Rsquared value. 
 
 This tells us that perhaps the super-specific diagnosis and procedure codes are not highly predicitve of charges, this somewhat defies expectations, as billing is generally completed using billing codes. This could just be the case for infants, as length of stay and severity are probably much greater factors of charges, while procedures are disproportionately and more or less uniformly deliveries, with some complications explainig the higher charges.
 
@@ -288,12 +288,30 @@ importance
 We only needed 114 components this time, which is still not great so will try alternative models.
 
 
-```{r}
+#Lasso
+```{r error=FALSE}
+set.seed(1)
+lasso.fit <- train(x, y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1,
+                                          lambda = exp(seq(-1, 5, length=100))),
+                   preProc = c("center", "scale"),
+trControl = ctrl1)
+
+
+ggplot(lasso.fit, highlight = TRUE) + theme_bw()
+lasso.fit$bestTune
+coef(lasso.fit$finalModel,lasso.fit$bestTune$lambda)
+```
+
+
+#Enet
+```{r error=FALSE}
 set.seed(1)
 enet.fit <- train(x, y,
                   method = "glmnet",
                   tuneGrid = expand.grid(alpha = seq(0, 1, length = 5),
-                                         lambda = exp(seq(-2, 5, length = 50))),
+                                         lambda = exp(seq(-2, 6, length = 50))),
                   preProc = c("center", "scale"),
                   trControl = ctrl1)
 
@@ -310,25 +328,18 @@ enet.fit$results
 ```{r}
 enet.fit$bestTune
 ggplot(enet.fit, highlight = TRUE) + theme_bw()
-
-
 coef(enet.fit$finalModel,enet.fit$bestTune$lambda)
 ```
 
 
-
-
-
-
-
-
 ```{r}
-resamp <-resamples(list(lm = lm.fit2, PCR = pcr.fit2, enet=enet.fit))
+resamp <-resamples(list(lm = lm.fit2, PCR = pcr.fit2, lasso=lasso.fit, enet=enet.fit))
 summary(resamp)
 
-bwplot(resamples(list(lm = lm.fit2, PCR = pcr.fit2, enet=enet.fit)), metric = "RMSE")
+bwplot(resamples(list(lm = lm.fit2, PCR = pcr.fit2, lasso=lasso.fit, enet=enet.fit)), metric = "RMSE")
 
-bwplot(resamples(list(lm = lm.fit2, PCR = pcr.fit2, enet=enet.fit, enet2=enet.fit2)), metric = "MAE")
+
+bwplot((resamp), metric = "MAE")
 
 ```
 
