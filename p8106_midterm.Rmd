@@ -22,7 +22,7 @@ Due to the high amount of categories in some of these variables, categories with
 
 
 #Exploratory Analysis
-As expected, charges vastly surpass the actual costs of inpatient stays for newborns. There appear to be slight differences in slopes between cost and charges for different races, but this can not be tested to be meaningful at this stage. There also appear to be differences between payment types, meaning that demographic and payment typology may interact with costs/charges may not be uniform between groups.
+As expected, charges vastly surpass the actual costs of inpatient stays for newborns. There appear to be slight differences in slopes between cost and charges for different races, but this can not be tested to be meaningful at this stage. There also appear to be differences between payment type intercepts, meaning that demographic and payment typology may interact with costs/charges or may not be uniform between groups.
 
 #Models
 Many variables were dropped for the final model, none of which significantly increased model performance. The final model containted the following predictors:
@@ -55,6 +55,8 @@ Limitations include extreme outlying charges. Tese observations resuted in high 
 #Conclusion
 The GAM model fit the data the best and had the lowest RMSE and MAE. The other regularized and linear models performed about the same. I expected the regularized models to fit the best, because there are a large amount of dummy variables that I expected would have their coefficients shrunk.
 
+
+#Data Analysis
 
 ## Load the data set
 Tips for dealing with large data https://rpubs.com/msundar/large_data_analysis 
