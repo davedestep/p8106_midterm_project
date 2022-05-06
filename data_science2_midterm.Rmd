@@ -1,0 +1,315 @@
+---
+title: "data_science2_midterm"
+author: "David DeStephano and Amanda Howarth"
+date: "3/29/2020"
+output:
+  pdf_document: default
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(sqldf)
+library(caret)
+library(ModelMetrics)
+library(ISLR)
+library(pls)
+library(mgcv)
+library(microbenchmark)
+library(stargazer)
+library(viridis)
+library(knitr)
+```
+
+# Background / Motivation
+Total hospital charges vary greatly for patients across the United States. In 2012, it was estimated that the mean hospital cost per stay was $10,400 (Moore et al., 2014). However, the cost per stay varies by different factors, including a patient's demographic information, the severity of their health condition, and type of admission. The costs of having a baby and the costs of infant hospitalizations also differ based on many different factors. In 2004, March of Dimes reported that the average cost of having a baby was $8,802. This cost varied by factors such as type of birth, whether it be a Cesarean-section of vaginal birth ($10,958 vs $7,737) (March of Dimes, 2007). This cost was also affected by the birthweight of the newborn, with the average cost per stay increasing to $15,100 for pre-term/low birthweight babies (Russell et al, 2007). For babies born at a weight less than 1000 grams, the average cost of hospital stay was reported to be $65,600 (Russell et al, 2007).
+
+The ability to predict the total cost of a patient’s stay at a hospital based on known patient characteristics, hospital information, and diagnosis would provide significant benefits for health insurance companies, patients, and hospital systems. If a soon-to-be mother was knowledgeable of the predicted charges of her upcoming birth at different hospitals, she would be better informed in choosing which hospital she would like to be admitted to. Additionally, a newborn/infant's parent can choose a hospital that is best for their family economically if their child is having health complications. 
+
+The goal of this analysis is to determine the best model to predict the total healthcare charges of newborn and infant patients who were admitted to hospitals in New York City. We used the Hospital Inpatient Discharges (SPARCS De-Identified) 2013 data set. This data was provided by the New York State Department of Health’s Office of Quality and Patient Safety and includes 2.43 million observations and 34 variables, such as features for demographic information, hospital stay, payment typology, cost information. 
+
+In order to load the dataset to my computer, this dataset was limited (through the NY State's website filter) to the hospital service area of New York City and includes information from hospitals in all five boroughs. The dataset was limited to include only patients who had birthweight information available, recorded during their hospital stay. Over 150+ CCS diagnosis codes were included in the original dataset. The CCS diagnosis codes were categorized into 17 diagnosis types, such as "infectious diseases" and" pregnancy and childbirth complications." Individuals with missing values (n = 119) were dropped from the dataset, totaling 121,380 patients in the final dataset. 
+
+Nineteen variables were dropped from the dataset. Variables were dropped if they were redundant of other variables or if they were not deemed to be clinically meaningful in predicting healthcare hospitalization charges. All categorical variables were turned into dummy variables with referent groups. The final dataset used for models in this analysis (with dummy variables) included 92 predictors and 1 response variable (total charges).
+
+Our research questions were the following: 
+•	Which approach (linear regression, lasso regression, ridge regression, principle component regression, or generalized additive model) best predicts a patient’s total healthcare charges per hospital stay in New York? 
+•	What is the root mean square error (RMSE) of each model? 
+•	What percent of the variance in total healthcare charges is explained by the predictors available in SPARCS?
+
+
+# Import and clean data 
+```{r}
+discharge_data = read_csv("./data/Hospital_Inpatient_Discharges__SPARCS_De-Identified___2013-4.csv") %>%
+  janitor::clean_names() %>%
+  mutate(birth_weight = as.numeric(birth_weight)) %>% 
+  mutate(length_of_stay = as.numeric(length_of_stay)) %>% 
+  janitor::clean_names() %>%
+select(-ccs_diagnosis_description, -ccs_procedure_code, -ccs_procedure_description, -apr_drg_description, -apr_mdc_description, -apr_severity_of_illness_description, -facility_id, -payment_typology_2, -payment_typology_3, -zip_code_3_digits, -discharge_year, -health_service_area, -operating_certificate_number, -abortion_edit_indicator, -patient_disposition, -age_group, -apr_drg_code, -apr_mdc_code) %>% 
+  filter(type_of_admission != "Not Available", payment_typology_1 != "Unknown", payment_typology_1 != "Miscellaneous/Other", apr_medical_surgical_description != "Not Applicable") %>% 
+        mutate(ccs = ifelse(ccs_diagnosis_code %in% 1:10, "infectious_disease", 
+                      ifelse(ccs_diagnosis_code %in% 11:47, "cancer",
+                      ifelse(ccs_diagnosis_code %in% 48:58, "endocrine_metabolic_disease",
+                      ifelse(ccs_diagnosis_code %in% 59:64, "blood_diseases",
+                      ifelse(ccs_diagnosis_code %in% 76:95, "nervous_system_disease",
+                      ifelse(ccs_diagnosis_code %in% 96:121, "circulatory_sysytem_disease",
+                      ifelse(ccs_diagnosis_code %in% 122:134, "respiratory_disease",
+                      ifelse(ccs_diagnosis_code %in% 135:155, "digestive_disease", 
+                      ifelse(ccs_diagnosis_code %in% 156:166, "genitourinary_disease", 
+                      ifelse(ccs_diagnosis_code %in% 167:196, "pregnancy_childbirth_complication",
+                      ifelse(ccs_diagnosis_code %in% 197:200, "skin_disease", 
+                      ifelse(ccs_diagnosis_code %in% 201:212, "musculoskeletal_disease",
+                      ifelse(ccs_diagnosis_code %in% 213:217, "congenital_anomalies",
+                      ifelse(ccs_diagnosis_code %in% 218:224, "perinatal_condition",
+                      ifelse(ccs_diagnosis_code %in% 225:244, "injury_poisoning",
+                      ifelse(ccs_diagnosis_code %in% 650:663, "mental_disorder", "other"))))))))))))))))) %>% 
+  select(-ccs_diagnosis_code) %>% 
+  na.omit()
+```
+
+# Exploratory Analysis Findings / Visualization 
+This dataset includes 121,380 patients who had their birthweight recorded at the time of their hospital visit. The mean total charges for a patient at discharge across the 49 hospital facilities was $19,787.95. The median total charges for a patient was $6,590.02. For exploratory analysis, we compared the median total charges because there were extreme outliers with very high charges. The median is a better measure of central tendency than the mean. The median total charges varied widely across the 49 facilities included in this analysis. The median total charges for a patient at discharge were highest at Montefiore Medical Center - Henry & Lucy Moses Div ($25,160.36) and lowest at North Central Bronx Hospital ($2,407.01) (Table 1). 
+
+In Figure 1, there is a positive correlation between length of stay and the total charges at discharge. The relationship between length of stay and total charges demonstrates linearity. Thus, as the length of stay increases, the total charges increased. The charges appear to be relatively lower at hospitals in Richmond County (Staten Island), even as the number of days spent in the hospital increases. Additionally, it appears that the charges at hospitals in Manhattan are typically higher compared to other counties across the lengths of stay. 
+
+Figure 2 demonstrates that the total charges generally decrease across increasing birthweight. There is a moderately negative correlation between baby birthweight and total charges. Thus, patients with lower birthweights pay the highest total charges at discharge.
+
+
+# Table 1 
+```{r}
+#Table 1. Median Total Charges by Hospital Facility
+charges_by_hospital = discharge_data %>% 
+  select(facility_name, total_charges, hospital_county) %>% 
+  group_by(facility_name, hospital_county) %>% 
+  summarize(median_charge = median(total_charges)) %>%
+  arrange(desc(median_charge)) %>% 
+  knitr::kable()
+charges_by_hospital
+
+#mean total charges = $19,787.95
+mean(discharge_data$total_charges)
+
+#median total charges =$6590.02
+median(discharge_data$total_charges)
+```
+
+# Figures 1 and 2
+```{r}
+ggplot(discharge_data, aes(x = length_of_stay, y = total_charges, group = hospital_county, color = hospital_county)) + 
+  geom_point(na.rm = TRUE) +
+  labs(title = "Figure 1. Total Charges by Length of Stay in NYC Hospitals",
+           x = "Length of Stay",
+           y = "Total Charges")
+
+ggplot(discharge_data, aes(x = birth_weight, y = total_charges, group = emergency_department_indicator)) + 
+  geom_point(na.rm = TRUE) +
+  labs(title = "Figure 2. Total Charges Across Values of Baby Birthweight in NYC Hospitals",
+           x = "Baby Birthweight",
+           y = "Total Charges")
+```
+
+
+# Making categorical varaibles into dummy variables 
+```{r}
+cat_dummies = dummyVars(" ~ .", data = discharge_data, fullRank = T)
+discharge_data2 = data.frame(predict(cat_dummies, newdata = discharge_data))
+```
+
+# Partitioning data into test and training data
+```{r}
+set.seed(100)
+trRows <- createDataPartition(discharge_data2$total_charges,
+                              p = .75,
+                              list = FALSE)
+## p = 0.75 means u are taking 75% of the data and thus, 25% is the test set and 75% is ur training set
+
+# matrix of predictors & vector of response (training data)
+x <- model.matrix(total_charges~.,discharge_data2)[trRows,-1]
+y <- discharge_data2$total_charges[trRows]
+
+# matrix of predictors & vector of response (test data)
+x2 <- model.matrix(total_charges~., discharge_data2)[-trRows,-1]
+y2 <- discharge_data2$total_charges[-trRows]
+
+```
+
+# MODELS 
+Models 
+We fit 5 different models using cross validation to determine which model would fit the data best: 
+•	One linear model, 
+•	Three regularized linear models (Lasso regression, Ridge regression, PCR), and
+•	One non-linear model (Generalized Additive Model). 
+
+Predictor variables included: 1) hospital county (Manhattan, Bronx, King's County, Richmond County, and Queens), 2) hospital facility, 3)gender, 4) race, 5) ethnicity, 6) length of stay, 7) type of admission, 8) APR severity of illness code, 9) APR medical-surgical description (medical or surgical), 10) type of payment, 11) birth weight, 12) emergency department indicator, 13) APR risk of mortality, 14) total costs, and 15) type of CCS diagnosis. All categorical variables were made into dummy variables. Three predictors were continuous (length of stay, birthweight, and total costs) as well as the outcome variable (total charges).
+
+Our dataset (92 predictors total, with dummy variables) was partitioned into a training and test data set. Five models were fitted using the training data and the mean squared error (MSE) was calculated for each model using the test data. We measured the mean squared error to quantify the extent to which the predicted response value for a given observation is close to the true response value for that observation. 
+
+First, we fit a linear model using least squares on all the predictors in the training data. We found that the MSE calculated on the test data was 937604771. By looking at the coefficient values for the linear model, some of the dummy variables were not significant at an alpha value of 0.05 in predicting total charges, including ethnicity, emergency department indicator, and certain CCS diagnosis types. 
+
+Next, we fit two models on all the predictor variables using two different techniques that "shrink" the coefficient estimates towards zero, which reduces variance. We fit a ridge regression model on the training data. Alpha was held at a value of 0 and our final lambda value chosen by cross-validation was 5355.389. Using our test data, we found that test error (MSE) was 9790669585. Next, we fit a lasso model on the training data. Alpha was held at a value of 1 and our final lambda value chosen by cross-validation was 28.03162. Our test error was 937116653. 
+
+We also fit a principle component regression (PCR) model on the training data with M chosen by cross validation. The PCR method constructs the first M principal components. Our M-value was 87 and our test error was 937635353. A benefit of using PCR is that this method avoids multicollinearity between variables in the dataset. A limitation of PCR is that there is no guarantee that Z¬m¬ are the best linear combinations of the variables in predicting the response. 
+
+Lastly, we fit a GAM model to our training dataset. The benefit of using a GAM model is that it will automatically model non-linear relationships that standard linear regression would miss. S functions were applied to the three continuous variables in the model (total costs, length of stay, and birthweight). 
+
+The best model for predicting total charges was PCR. This model was chosen because it has the smallest cross validation RMSE, a value of 28173.68 (Figure 3). For the PCR model, 85.69% of the variance in total charges is explained by the predictors in the model. The mean RMSE value of the lasso regression model (28174.24) and linear regression model (28180.84) were very close to the PCR model (depicted in Figure 4). Overall, GAM had the lowest RMSE (29076.52), which was unexpected because it was the only model to account for non-linear relationships that a standard linear regression model would miss.
+
+For the PCR model, the top 10 variables that played important roles in predicting a patient’s total charges are displayed in Figure 4. These variables were chosen using the varImp() function, which automatically chooses a measure of variable importance that is appropriate for given algorithms. The top five variables included length of stay, total costs, APR risk of mortality (major), APR risk of mortality (minor), and the APR severity of illness code. The greatest importance in predicting total healthcare charges was length of stay in the hospital, which aligns with the linear relationship depicted in Figure 1.
+
+Limitations of this analysis included that non-significant variables were included in models and not dropped to improve the model. This was done in an effort to compare models, by first including all predictors in the model building phase. Thus, if we were to drop variables that are neither clinically meaningful nor significant, this may have created more parsimonious and efficient models. Additionally, the highest R^2 value was 85.69%. The remaining variance of total charges are thus unexplained and may be due to variables that were dropped (such as patient’s zip code) or by features not collected in this dataset. 
+
+# LINEAR MODEL 
+Fitting a linear model using least squares on the training data and calculating the mean square error using the test data.
+```{r}
+set.seed(100)
+ctrl1 <- trainControl(method = "cv", number = 10)
+
+fit_lm <- train(total_charges~., 
+                data = discharge_data2[trRows,-1], 
+                method = "lm", 
+                trControl = ctrl1)
+fit_lm
+
+summary(fit_lm)
+
+#test error 
+pred_lm <- predict(fit_lm, discharge_data2[-trRows, -1])
+mse(y2, pred_lm)
+rmse(y2, pred_lm)
+```
+We found the test erorr (MSE) to be 937604771 with a lambda value of 28.03162. 
+
+# RIDGE REGRESSION
+Fiting a ridge regression model on the training data, with λ chosen by cross-validation. Report the test error.
+```{r}
+set.seed(100)
+ridge.fit <- train(x, y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 0, 
+                                          lambda = exp(seq(-50, 50, length=100))), 
+                   preProc = c("center", "scale"),
+                   trControl = ctrl1)
+ridge.fit
+
+#lambda value 
+ridge.fit$bestTune 
+
+#model coefficients 
+coef(ridge.fit$finalModel,ridge.fit$bestTune$lambda) 
+
+#test error 
+pred_ridge <- predict(ridge.fit, x)
+mse(y2, pred_ridge)
+rmse(y2, pred_ridge)
+```
+We found the test erorr (MSE) to be 9790669585 with a lambda value of 5355.389.
+
+
+# LASSO MODEL
+Fiting a lasso model on the training data, with λ chosen by cross-validation. Report the test error, along with the number of non-zero coefficient estimates.
+```{r}
+set.seed(100)
+lasso.fit <- train(x, y,
+                   method = "glmnet",
+                   tuneGrid = expand.grid(alpha = 1, 
+                                          lambda = exp(seq(-10, 10, length=100))),
+                   preProc = c("center", "scale"),
+                   trControl = ctrl1)
+lasso.fit
+
+#lamda value 
+lasso.fit$bestTune
+
+#model coefficients 
+coef(lasso.fit$finalModel,lasso.fit$bestTune$lambda)
+
+#test error 
+pred_lasso <- predict(lasso.fit, newdata = x2)
+mse(y2, pred_lasso)
+rmse(y2, pred_lasso)
+```
+We found the test erorr (MSE) to be 937116653 with a lambda value of 28.03162. 
+
+
+# PCR MODEL
+Fitting a principle component regression model on the training data, with M chosen by cross-validation.
+```{r}
+set.seed(100)
+pcr.fit <-train(x, y,
+                method = "pcr",
+                tuneGrid  =data.frame(ncomp = 1:92), 
+                trControl = ctrl1,
+               preProc =c("center", "scale"))
+pcr.fit 
+
+#M value
+pcr.fit$bestTune
+
+#test error 
+pred_pcr <- predict(pcr.fit, x2, ncomp = 87)
+mse(y2, pred_pcr)
+rmse(y2, pred_pcr)
+
+summary(pcr.fit)
+
+var_imp = varImp(pcr.fit, scale=FALSE)
+var_imp
+
+#Figure 4: Importance of each variable
+plot(var_imp, top = 10)
+
+```
+We found the test erorr to be 937635353 with an M value of 87 selected by cross-validation.
+
+# GAM MODEL
+Fiting a  generalized  additive  model  (GAM)  using  all  the  predictors. 
+```{r}
+set.seed(100) 
+
+gam.fit <- train(x, y,
+                 method = "gam",
+                 tuneGrid = data.frame(method = "GCV.Cp", select = c(TRUE,FALSE)),
+                 trControl = ctrl1)
+
+gam.fit$bestTune
+gam.fit$finalModel
+
+pred_gam <- predict(gam.fit, x2)
+mse(y2, pred_gam)
+rmse(y2, pred_gam)
+summary(gam.fit)
+```
+
+
+# Choosing best model to predict total healthcare charges 
+```{r, fig.width=5}
+resamp <- resamples(list(lm = fit_lm, 
+                         lasso = lasso.fit, 
+                         pcr = pcr.fit, 
+                         gam = gam.fit,
+                         ridge = ridge.fit))
+
+#Figure 3: Boxplot of all 3 models
+bwplot(resamp, metric = "RMSE")
+
+summary(resamp)
+
+```
+
+# Using final PCR model to predict test data 
+```{r}
+#Using PCR model to predict total charges of test dataset
+predictions <- pcr.fit %>% predict(x2)
+predictions
+```
+
+# Conclusion
+Of all models, the PCR model best predicted total healthcare charges of patients at time of discharge. The PCR model had very similar RMSE values to the linear model and lasso regression model, and thus, they have similar prediction performance. By listing the most important variables in predicting charges, we gained insight into the most important predictors for healthcare charges, particularly gaining knowledge that length of stay and total costs have much greater importance in predicting the charges compared to other variables. Birthweight is the top 6th highest importance, which is expected, as it often recorded in literature. It was of valuable insight to learn that the APR risk of mortality (minor, major, and moderate) has strong importance in determining total charges as well as congenital anomalies and Urgent admission types.   
+
+
